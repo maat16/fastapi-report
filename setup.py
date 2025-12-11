@@ -8,7 +8,7 @@ long_description = (this_directory / "README.md").read_text(encoding="utf-8")
 
 setup(
     name="fastapi-report",
-    version="1.0.1",
+    version="1.0.2",
     author="FastAPI Report Contributors",
     author_email="mahammad.suhail.94@gmail.com",
     description="Universal FastAPI documentation generator - automatically document REST endpoints and MCP tools",
