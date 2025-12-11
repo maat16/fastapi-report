@@ -10,7 +10,7 @@ setup(
     name="fastapi-report",
     version="1.0.0",
     author="FastAPI Report Contributors",
-    author_email="",
+    author_email="mahammad.suhail.94@gmail.com",
     description="Universal FastAPI documentation generator - automatically document REST endpoints and MCP tools",
     long_description=long_description,
     long_description_content_type="text/markdown",
@@ -56,8 +56,8 @@ setup(
     },
     keywords="fastapi documentation openapi mcp api-documentation swagger",
     project_urls={
-        "Bug Reports": "https://github.com/yourusername/fastapi-report/issues",
-        "Source": "https://github.com/yourusername/fastapi-report",
-        "Documentation": "https://github.com/yourusername/fastapi-report#readme",
+        "Bug Reports": "https://github.com/maat16/fastapi-report/issues",
+        "Source": "https://github.com/maat16/fastapi-report",
+        "Documentation": "https://github.com/maat16/fastapi-report#readme",
     },
 )
