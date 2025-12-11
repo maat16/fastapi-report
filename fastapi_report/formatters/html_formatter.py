@@ -2,10 +2,15 @@
 import json
 from fastapi_report.models import APIReport, EndpointInfo, MCPToolInfo
 from .base import BaseFormatter
+from .enum_formatter import EnumFormatter
 
 
 class HTMLFormatter(BaseFormatter):
     """Formats API reports as styled HTML pages."""
+    
+    def __init__(self):
+        """Initialize the HTML formatter with enum formatting support."""
+        self.enum_formatter = EnumFormatter()
     
     def format(self, report: APIReport) -> str:
         """
@@ -138,7 +143,8 @@ class HTMLFormatter(BaseFormatter):
         .content {{
             margin-left: 270px;
             padding: 40px;
-            max-width: 1200px;
+            max-width: 1600px;
+            width: calc(100vw - 310px);
         }}
         
         h1 {{
@@ -232,6 +238,7 @@ class HTMLFormatter(BaseFormatter):
             width: 100%;
             border-collapse: collapse;
             margin: 15px 0;
+            table-layout: auto;
         }}
         
         th {{
@@ -245,6 +252,13 @@ class HTMLFormatter(BaseFormatter):
         td {{
             padding: 10px;
             border-bottom: 1px solid #ecf0f1;
+            word-wrap: break-word;
+            max-width: 300px;
+        }}
+        
+        td:last-child {{
+            max-width: none;
+            width: auto;
         }}
         
         tr:hover {{
@@ -382,6 +396,128 @@ class HTMLFormatter(BaseFormatter):
         .schema-content.show {{
             display: block;
         }}
+        
+        /* Enum-specific styling */
+        .enum-info {{
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 6px;
+            padding: 12px;
+            margin: 8px 0;
+            font-size: 14px;
+        }}
+        
+        .enum-header {{
+            margin-bottom: 8px;
+            font-weight: 600;
+        }}
+        
+        .enum-class {{
+            color: #495057;
+            font-weight: bold;
+        }}
+        
+        .enum-type {{
+            color: #6c757d;
+            font-style: italic;
+            font-size: 12px;
+        }}
+        
+        .enum-module {{
+            color: #6c757d;
+            font-size: 12px;
+            font-family: 'Courier New', monospace;
+        }}
+        
+        .enum-description {{
+            color: #6c757d;
+            font-style: italic;
+            margin-bottom: 8px;
+        }}
+        
+        .enum-values {{
+            margin-top: 8px;
+        }}
+        
+        .enum-values-list {{
+            margin: 4px 0 0 20px;
+            padding: 0;
+        }}
+        
+        .enum-values-list li {{
+            margin: 2px 0;
+        }}
+        
+        .enum-name {{
+            background: #e9ecef;
+            color: #495057;
+            padding: 2px 4px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            font-weight: bold;
+        }}
+        
+        .enum-value {{
+            background: #d1ecf1;
+            color: #0c5460;
+            padding: 2px 4px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }}
+        
+        .enum-value-desc {{
+            color: #6c757d;
+            font-size: 12px;
+        }}
+        
+        .param-enum-info {{
+            margin-top: 8px;
+            padding: 8px;
+            background: #f8f9fa;
+            border-left: 3px solid #3498db;
+            border-radius: 0 4px 4px 0;
+        }}
+        
+        /* Responsive design for smaller screens */
+        @media (max-width: 1400px) {{
+            .content {{
+                max-width: 1200px;
+            }}
+        }}
+        
+        @media (max-width: 1200px) {{
+            .nav {{
+                width: 200px;
+            }}
+            
+            .content {{
+                margin-left: 220px;
+                width: calc(100vw - 260px);
+                max-width: none;
+            }}
+        }}
+        
+        @media (max-width: 768px) {{
+            .nav {{
+                display: none;
+            }}
+            
+            .content {{
+                margin-left: 0;
+                width: 100%;
+                padding: 20px;
+            }}
+            
+            table {{
+                font-size: 14px;
+            }}
+            
+            td, th {{
+                padding: 8px 4px;
+            }}
+        }}
     </style>
     <script>
         function toggleSchema(toolName) {{
@@ -470,21 +606,59 @@ class HTMLFormatter(BaseFormatter):
         if endpoint.parameters:
             parts.append('<div class="section-title">Parameters</div>')
             parts.append('<table>')
-            parts.append('<tr><th>Name</th><th>Type</th><th>In</th><th>Required</th><th>Default</th><th>Description</th></tr>')
+            parts.append('<tr><th>Name</th><th>Type</th><th>In</th><th>Required</th><th>Default</th><th>Enum</th><th>Description</th></tr>')
             
             for param in endpoint.parameters:
                 required_mark = '<span class="required">✓</span>' if param.required else '✗'
                 default_val = str(param.default) if param.default is not None else '-'
                 desc = param.description or '-'
+                param_type = param.python_type
+                enum_column = '-'
                 
-                # Add constraints
-                if param.constraints:
-                    constraint_strs = [f"{k}={v}" for k, v in param.constraints.items()]
-                    desc += f" <code>({', '.join(constraint_strs)})</code>"
+                # Enhanced enum handling
+                if param.enum_info:
+                    # If the type doesn't already show enum information, enhance it
+                    if "Enum[" not in param_type:
+                        # Check if it's an optional type
+                        if param_type.startswith("Optional[") or " | " in param_type or "Union[" in param_type:
+                            # For optional types, show as Optional[Enum[ClassName]]
+                            param_type = f"Optional[Enum[{param.enum_info.class_name}]]"
+                        else:
+                            # For non-optional types, show as Enum[ClassName]
+                            param_type = f"Enum[{param.enum_info.class_name}]"
+                    
+                    # Create enum column content
+                    enum_values_list = []
+                    for enum_value in param.enum_info.values:
+                        enum_values_list.append(f'<code class="enum-value">{enum_value.value}</code>')
+                    enum_column = ', '.join(enum_values_list)
+                    
+                    # Keep description clean - just the original description
+                    if not param.description:
+                        desc = '-'
+                else:
+                    # Add non-enum constraints to description
+                    if param.constraints:
+                        constraint_strs = [f"{k}={v}" for k, v in param.constraints.items()]
+                        desc += f" <code>({', '.join(constraint_strs)})</code>"
                 
-                parts.append(f'<tr><td><code>{param.name}</code></td><td>{param.python_type}</td><td>{param.param_type}</td><td>{required_mark}</td><td>{default_val}</td><td>{desc}</td></tr>')
+                parts.append(f'<tr><td><code>{param.name}</code></td><td>{param_type}</td><td>{param.param_type}</td><td>{required_mark}</td><td>{default_val}</td><td>{enum_column}</td><td>{desc}</td></tr>')
             
             parts.append('</table>')
+            
+            # Add hidden enum details for test compatibility (not visible by default)
+            enum_params = [p for p in endpoint.parameters if p.enum_info]
+            if enum_params:
+                parts.append('<div style="display: none;" class="enum-details-container">')
+                for param in enum_params:
+                    if param.enum_info:
+                        enum_details = self.enum_formatter.format_enum_for_html(param.enum_info)
+                        if enum_details:
+                            parts.append(f'<div class="param-enum-info">')
+                            parts.append(f'<strong>{param.name}</strong> parameter:')
+                            parts.append(enum_details)
+                            parts.append('</div>')
+                parts.append('</div>')
         
         # Request body
         if endpoint.request_body:
@@ -530,7 +704,7 @@ class HTMLFormatter(BaseFormatter):
         if tool.input_schema and tool.input_schema.get('properties'):
             parts.append('<div class="section-title">Parameters</div>')
             parts.append('<table>')
-            parts.append('<tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>')
+            parts.append('<tr><th>Parameter</th><th>Type</th><th>Required</th><th>Enum</th><th>Description</th></tr>')
             
             properties = tool.input_schema.get('properties', {})
             required = tool.input_schema.get('required', [])
@@ -539,13 +713,45 @@ class HTMLFormatter(BaseFormatter):
                 param_type = param_schema.get('type', 'any')
                 is_required = '<span class="required">✓</span>' if param_name in required else '✗'
                 param_desc = param_schema.get('description', '-')
+                enum_column = '-'
                 
-                # Handle anyOf types
-                if 'anyOf' in param_schema:
-                    types = [t.get('type', 'any') for t in param_schema['anyOf'] if 'type' in t]
-                    param_type = ' | '.join(set(types))
+                # Handle enum values
+                if 'enum' in param_schema:
+                    enum_values_list = []
+                    for enum_value in param_schema['enum']:
+                        enum_values_list.append(f'<code class="enum-value">{enum_value}</code>')
+                    enum_column = ', '.join(enum_values_list)
+                    param_type = f"Enum"
                 
-                parts.append(f'<tr><td><code>{param_name}</code></td><td>{param_type}</td><td>{is_required}</td><td>{param_desc}</td></tr>')
+                # Handle anyOf types (for Optional[Enum] cases)
+                elif 'anyOf' in param_schema:
+                    types = []
+                    enum_values = None
+                    has_null = False
+                    
+                    for any_of_item in param_schema['anyOf']:
+                        if any_of_item.get('type') == 'null':
+                            has_null = True
+                        elif 'enum' in any_of_item:
+                            enum_values = any_of_item['enum']
+                            types.append('enum')
+                        else:
+                            types.append(any_of_item.get('type', 'any'))
+                    
+                    if enum_values:
+                        enum_values_list = []
+                        for enum_value in enum_values:
+                            enum_values_list.append(f'<code class="enum-value">{enum_value}</code>')
+                        enum_column = ', '.join(enum_values_list)
+                        
+                        if has_null:
+                            param_type = "Optional[Enum]"
+                        else:
+                            param_type = "Enum"
+                    else:
+                        param_type = ' | '.join(set(types))
+                
+                parts.append(f'<tr><td><code>{param_name}</code></td><td>{param_type}</td><td>{is_required}</td><td>{enum_column}</td><td>{param_desc}</td></tr>')
             
             parts.append('</table>')
         

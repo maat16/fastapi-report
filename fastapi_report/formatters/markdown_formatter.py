@@ -1,10 +1,19 @@
 """Markdown formatter for API reports."""
+import logging
 from fastapi_report.models import APIReport, EndpointInfo, ParameterInfo, MCPToolInfo
 from .base import BaseFormatter
+from .enum_formatter import EnumFormatter
+
+# Configure logger for Markdown formatting
+logger = logging.getLogger(__name__)
 
 
 class MarkdownFormatter(BaseFormatter):
     """Formats API reports as Markdown documentation."""
+    
+    def __init__(self):
+        """Initialize the markdown formatter with enum formatting support."""
+        self.enum_formatter = EnumFormatter()
     
     def format(self, report: APIReport) -> str:
         """
@@ -131,7 +140,7 @@ class MarkdownFormatter(BaseFormatter):
     
     def format_parameters_table(self, params: list) -> list:
         """
-        Format parameters as Markdown table.
+        Format parameters as Markdown table with enhanced enum support.
         
         Args:
             params: List of ParameterInfo objects
@@ -142,8 +151,8 @@ class MarkdownFormatter(BaseFormatter):
         lines = []
         
         # Table header
-        lines.append("| Name | Type | In | Required | Default | Description |")
-        lines.append("|------|------|----|---------|---------| ------------|")
+        lines.append("| Name | Type | In | Required | Default | Enum | Description |")
+        lines.append("|------|------|----|---------|---------| ---- | ------------|")
         
         # Table rows
         for param in params:
@@ -153,16 +162,55 @@ class MarkdownFormatter(BaseFormatter):
             required = "✓" if param.required else "✗"
             default = str(param.default) if param.default is not None else "-"
             desc = param.description or "-"
+            enum_column = "-"
             
-            # Add constraints to description
-            if param.constraints:
-                constraint_strs = []
-                for key, value in param.constraints.items():
-                    constraint_strs.append(f"{key}={value}")
-                if constraint_strs:
-                    desc += f" ({', '.join(constraint_strs)})"
+            # Enhanced enum handling
+            if param.enum_info:
+                # If the type doesn't already show enum information, enhance it
+                if "Enum[" not in ptype:
+                    # Check if it's an optional type
+                    if ptype.startswith("Optional[") or " | " in ptype or "Union[" in ptype:
+                        # For optional types, show as Optional[Enum[ClassName]]
+                        ptype = f"Optional[Enum[{param.enum_info.class_name}]]"
+                    else:
+                        # For non-optional types, show as Enum[ClassName]
+                        ptype = f"Enum[{param.enum_info.class_name}]"
+                
+                # Create enum column content
+                if param.enum_info.values:
+                    values_list = []
+                    for enum_value in param.enum_info.values:
+                        values_list.append(f"`{enum_value.value}`")
+                    enum_column = ", ".join(values_list)
+                
+                # Keep description clean - just the original description
+                if not param.description:
+                    desc = "-"
+            else:
+                # Add non-enum constraints to description
+                if param.constraints:
+                    constraint_strs = []
+                    for key, value in param.constraints.items():
+                        constraint_strs.append(f"{key}={value}")
+                    if constraint_strs:
+                        desc += f" ({', '.join(constraint_strs)})"
             
-            lines.append(f"| {name} | {ptype} | {location} | {required} | {default} | {desc} |")
+            lines.append(f"| {name} | {ptype} | {location} | {required} | {default} | {enum_column} | {desc} |")
+        
+        # Add detailed enum information after the table
+        enum_params = [p for p in params if p.enum_info]
+        if enum_params:
+            lines.append("")
+            lines.append("**Enum Details:**")
+            lines.append("")
+            for param in enum_params:
+                if param.enum_info:
+                    enum_details = self.enum_formatter.format_enum_for_markdown(param.enum_info)
+                    if enum_details:
+                        lines.append(f"**{param.name}** parameter:")
+                        lines.append("")
+                        lines.extend(enum_details.split('\n'))
+                        lines.append("")
         
         return lines
     
@@ -212,20 +260,52 @@ class MarkdownFormatter(BaseFormatter):
             required = tool.input_schema.get('required', [])
             
             if properties:
-                lines.append("| Parameter | Type | Required | Description |")
-                lines.append("|-----------|------|----------|-------------|")
+                lines.append("| Parameter | Type | Required | Enum | Description |")
+                lines.append("|-----------|------|----------|------|-------------|")
                 
                 for param_name, param_schema in properties.items():
                     param_type = param_schema.get('type', 'any')
                     is_required = "✓" if param_name in required else "✗"
                     param_desc = param_schema.get('description', '-')
+                    enum_column = "-"
                     
-                    # Handle anyOf types
-                    if 'anyOf' in param_schema:
-                        types = [t.get('type', 'any') for t in param_schema['anyOf'] if 'type' in t]
-                        param_type = ' | '.join(set(types))
+                    # Handle enum values
+                    if 'enum' in param_schema:
+                        enum_values_list = []
+                        for enum_value in param_schema['enum']:
+                            enum_values_list.append(f"`{enum_value}`")
+                        enum_column = ", ".join(enum_values_list)
+                        param_type = "Enum"
                     
-                    lines.append(f"| {param_name} | {param_type} | {is_required} | {param_desc} |")
+                    # Handle anyOf types (for Optional[Enum] cases)
+                    elif 'anyOf' in param_schema:
+                        types = []
+                        enum_values = None
+                        has_null = False
+                        
+                        for any_of_item in param_schema['anyOf']:
+                            if any_of_item.get('type') == 'null':
+                                has_null = True
+                            elif 'enum' in any_of_item:
+                                enum_values = any_of_item['enum']
+                                types.append('enum')
+                            else:
+                                types.append(any_of_item.get('type', 'any'))
+                        
+                        if enum_values:
+                            enum_values_list = []
+                            for enum_value in enum_values:
+                                enum_values_list.append(f"`{enum_value}`")
+                            enum_column = ", ".join(enum_values_list)
+                            
+                            if has_null:
+                                param_type = "Optional[Enum]"
+                            else:
+                                param_type = "Enum"
+                        else:
+                            param_type = ' | '.join(set(types))
+                    
+                    lines.append(f"| {param_name} | {param_type} | {is_required} | {enum_column} | {param_desc} |")
                 
                 lines.append("")
             

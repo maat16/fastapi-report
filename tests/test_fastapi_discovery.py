@@ -237,3 +237,93 @@ def test_openapi_schema_retrieval():
     assert schema["info"]["version"] == "1.0.0"
     assert "paths" in schema
     assert "/test" in schema["paths"]
+
+
+def test_enum_parameter_detection():
+    """
+    Test that enum parameters are properly detected and documented.
+    """
+    from enum import Enum
+    
+    app = FastAPI()
+    
+    class Status(Enum):
+        ACTIVE = "active"
+        INACTIVE = "inactive"
+        PENDING = "pending"
+    
+    @app.get("/users")
+    def get_users(status: Status = Query(Status.ACTIVE, description="User status filter")):
+        return []
+    
+    discovery = FastAPIDiscovery(app)
+    endpoints = discovery.discover_endpoints()
+    
+    assert len(endpoints) == 1
+    endpoint = endpoints[0]
+    
+    # Should have 1 parameter
+    assert len(endpoint.parameters) == 1
+    
+    # Check status parameter
+    status_param = endpoint.parameters[0]
+    assert status_param.name == "status"
+    assert status_param.param_type == "query"
+    assert status_param.python_type == "Enum[Status]"
+    assert status_param.required == False
+    assert status_param.default == Status.ACTIVE
+    assert status_param.description == "User status filter"
+    
+    # Should have enum_info
+    assert status_param.enum_info is not None
+    assert status_param.enum_info.class_name == "Status"
+    assert len(status_param.enum_info.values) == 3
+    
+    # Check enum values
+    enum_values = {ev.name: ev.value for ev in status_param.enum_info.values}
+    assert enum_values["ACTIVE"] == "active"
+    assert enum_values["INACTIVE"] == "inactive"
+    assert enum_values["PENDING"] == "pending"
+
+
+def test_field_enum_parameter_detection():
+    """
+    Test that field-only enum parameters (using enum= in Query) are properly detected.
+    """
+    app = FastAPI()
+    
+    @app.get("/items")
+    def get_items(category: str = Query(..., enum=["electronics", "books", "clothing"], description="Item category")):
+        return []
+    
+    discovery = FastAPIDiscovery(app)
+    endpoints = discovery.discover_endpoints()
+    
+    assert len(endpoints) == 1
+    endpoint = endpoints[0]
+    
+    # Should have 1 parameter
+    assert len(endpoint.parameters) == 1
+    
+    # Check category parameter
+    category_param = endpoint.parameters[0]
+    assert category_param.name == "category"
+    assert category_param.param_type == "query"
+    assert category_param.python_type == "str"
+    assert category_param.required == True
+    assert category_param.description == "Item category"
+    
+    # Should have enum constraint in regular constraints
+    assert "enum" in category_param.constraints
+    assert category_param.constraints["enum"] == ["electronics", "books", "clothing"]
+    
+    # Should also have enum_info
+    assert category_param.enum_info is not None
+    assert category_param.enum_info.class_name == "FieldEnum"
+    assert len(category_param.enum_info.values) == 3
+    
+    # Check enum values
+    enum_values = {ev.name: ev.value for ev in category_param.enum_info.values}
+    assert enum_values["electronics"] == "electronics"
+    assert enum_values["books"] == "books"
+    assert enum_values["clothing"] == "clothing"

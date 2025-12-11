@@ -10,6 +10,36 @@ from datetime import datetime, timezone
 
 
 @dataclass
+class EnumValue:
+    """Information about an individual enum value."""
+    
+    name: str  # Enum member name (e.g., "RED")
+    value: Any  # Enum member value (e.g., "red" or 1)
+    description: Optional[str] = None  # Optional documentation
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        return asdict(self)
+
+
+@dataclass
+class EnumInfo:
+    """Complete enum metadata information."""
+    
+    class_name: str  # Enum class name
+    module_name: Optional[str] = None  # Module where enum is defined
+    values: List[EnumValue] = field(default_factory=list)  # All enum members
+    enum_type: str = "Enum"  # "Enum", "IntEnum", "StrEnum", etc.
+    description: Optional[str] = None  # Enum class documentation
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        data = asdict(self)
+        data['values'] = [v.to_dict() for v in self.values]
+        return data
+
+
+@dataclass
 class ParameterInfo:
     """Information about an endpoint parameter."""
     
@@ -20,10 +50,14 @@ class ParameterInfo:
     default: Any = None
     description: Optional[str] = None
     constraints: Dict[str, Any] = field(default_factory=dict)
+    enum_info: Optional[EnumInfo] = None  # New field for enum metadata
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
-        return asdict(self)
+        data = asdict(self)
+        if self.enum_info:
+            data['enum_info'] = self.enum_info.to_dict()
+        return data
 
 
 @dataclass
@@ -40,6 +74,7 @@ class EndpointInfo:
     request_body: Optional[Dict[str, Any]] = None
     responses: Dict[int, Dict[str, Any]] = field(default_factory=dict)
     deprecated: bool = False
+    pydantic_enum_info: Dict[str, Any] = field(default_factory=dict)  # New field for Pydantic model enum info
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""

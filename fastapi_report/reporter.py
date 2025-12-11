@@ -5,7 +5,7 @@ import importlib
 import sys
 import requests
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI
 from fastapi_report.models import APIReport
@@ -101,6 +101,135 @@ class EndpointReporter:
         
         return None
     
+    def _extract_enum_from_openapi_schema(self, schema: Dict[str, Any], openapi_spec: Dict[str, Any]) -> Optional[Any]:
+        """
+        Extract enum information from OpenAPI schema.
+        
+        Args:
+            schema: OpenAPI parameter schema
+            openapi_spec: Full OpenAPI specification for resolving $ref
+            
+        Returns:
+            EnumInfo object if enum is found, None otherwise
+        """
+        from fastapi_report.models import EnumInfo, EnumValue
+        
+        # Direct enum in schema
+        if 'enum' in schema:
+            enum_values = []
+            for value in schema['enum']:
+                enum_values.append(EnumValue(name=str(value).upper(), value=value))
+            
+            return EnumInfo(
+                class_name=schema.get('title', 'Enum'),
+                module_name=None,
+                values=enum_values,
+                enum_type='Enum',
+                description=schema.get('description')
+            )
+        
+        # Check anyOf structure (for Optional[Enum] types)
+        if 'anyOf' in schema:
+            for any_of_item in schema['anyOf']:
+                # Handle $ref references
+                if '$ref' in any_of_item:
+                    resolved_schema = self._resolve_ref(any_of_item['$ref'], openapi_spec)
+                    if resolved_schema and 'enum' in resolved_schema:
+                        enum_values = []
+                        for value in resolved_schema['enum']:
+                            enum_values.append(EnumValue(name=str(value).upper(), value=value))
+                        
+                        return EnumInfo(
+                            class_name=resolved_schema.get('title', schema.get('title', 'Enum')),
+                            module_name=None,
+                            values=enum_values,
+                            enum_type='StrEnum' if all(isinstance(v, str) for v in resolved_schema['enum']) else 'Enum',
+                            description=resolved_schema.get('description', schema.get('description'))
+                        )
+                
+                # Handle direct enum
+                elif 'enum' in any_of_item:
+                    enum_values = []
+                    for value in any_of_item['enum']:
+                        enum_values.append(EnumValue(name=str(value).upper(), value=value))
+                    
+                    return EnumInfo(
+                        class_name=any_of_item.get('title', schema.get('title', 'Enum')),
+                        module_name=None,
+                        values=enum_values,
+                        enum_type='StrEnum' if all(isinstance(v, str) for v in any_of_item['enum']) else 'Enum',
+                        description=any_of_item.get('description', schema.get('description'))
+                    )
+        
+        return None
+    
+    def _get_python_type_from_schema(self, schema: Dict[str, Any], openapi_spec: Dict[str, Any]) -> str:
+        """
+        Determine Python type string from OpenAPI schema.
+        
+        Args:
+            schema: OpenAPI parameter schema
+            openapi_spec: Full OpenAPI specification for resolving $ref
+            
+        Returns:
+            Python type string
+        """
+        # Check for enum first
+        enum_info = self._extract_enum_from_openapi_schema(schema, openapi_spec)
+        if enum_info:
+            # Check if it's optional (has null in anyOf)
+            if 'anyOf' in schema:
+                has_null = any(item.get('type') == 'null' for item in schema['anyOf'])
+                if has_null:
+                    return f"Optional[Enum[{enum_info.class_name}]]"
+            return f"Enum[{enum_info.class_name}]"
+        
+        # Handle anyOf for optional types
+        if 'anyOf' in schema:
+            types = []
+            has_null = False
+            for item in schema['anyOf']:
+                if item.get('type') == 'null':
+                    has_null = True
+                else:
+                    item_type = item.get('type', 'any')
+                    types.append(item_type)
+            
+            if has_null and len(types) == 1:
+                return f"Optional[{types[0]}]"
+            elif types:
+                return ' | '.join(types)
+        
+        # Basic type
+        return schema.get('type', 'any')
+    
+    def _resolve_ref(self, ref: str, openapi_spec: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Resolve a $ref reference in OpenAPI schema.
+        
+        Args:
+            ref: Reference string like "#/components/schemas/HealthStatus"
+            openapi_spec: Full OpenAPI specification
+            
+        Returns:
+            Resolved schema object or None if not found
+        """
+        if not ref.startswith('#/'):
+            return None
+        
+        # Parse the reference path
+        path_parts = ref[2:].split('/')  # Remove '#/' and split
+        
+        # Navigate through the spec
+        current = openapi_spec
+        for part in path_parts:
+            if isinstance(current, dict) and part in current:
+                current = current[part]
+            else:
+                return None
+        
+        return current if isinstance(current, dict) else None
+    
     def generate_report(self) -> APIReport:
         """
         Run discovery and create report.
@@ -161,14 +290,30 @@ class EndpointReporter:
                     # Extract parameters
                     parameters = []
                     for param in operation.get('parameters', []):
+                        schema = param.get('schema', {})
+                        
+                        # Extract enum information from OpenAPI schema
+                        enum_info = self._extract_enum_from_openapi_schema(schema, openapi_spec)
+                        
+                        # Determine python type
+                        python_type = self._get_python_type_from_schema(schema, openapi_spec)
+                        
+                        # Extract constraints including enum values
+                        constraints = {}
+                        if 'enum' in schema:
+                            constraints['enum'] = schema['enum']
+                        elif enum_info and enum_info.values:
+                            constraints['enum'] = [v.value for v in enum_info.values]
+                        
                         param_info = ParameterInfo(
                             name=param.get('name', ''),
                             param_type=param.get('in', 'query'),
-                            python_type=param.get('schema', {}).get('type', 'any'),
+                            python_type=python_type,
                             required=param.get('required', False),
-                            default=param.get('schema', {}).get('default'),
+                            default=schema.get('default'),
                             description=param.get('description'),
-                            constraints={}
+                            constraints=constraints,
+                            enum_info=enum_info
                         )
                         parameters.append(param_info)
                     

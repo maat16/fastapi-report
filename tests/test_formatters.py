@@ -314,3 +314,501 @@ def test_html_formatter_includes_css_styling():
     
     # Should contain some CSS rules
     assert "body" in output or "font-family" in output
+
+
+def test_json_formatter_includes_enum_information():
+    """Test that JSON formatter properly includes enum information in output."""
+    from fastapi_report.models import EnumInfo, EnumValue
+    
+    # Create parameter with enum information
+    enum_values = [
+        EnumValue(name="ACTIVE", value="active", description="User is active"),
+        EnumValue(name="INACTIVE", value="inactive", description="User is inactive")
+    ]
+    
+    enum_info = EnumInfo(
+        class_name="UserStatus",
+        module_name="test.models",
+        values=enum_values,
+        enum_type="StrEnum",
+        description="User status enumeration"
+    )
+    
+    param_with_enum = ParameterInfo(
+        name="status",
+        param_type="query",
+        python_type="Enum[UserStatus]",
+        required=False,
+        default="active",
+        description="User status filter",
+        constraints={"enum": ["active", "inactive"]},
+        enum_info=enum_info
+    )
+    
+    endpoint = EndpointInfo(
+        path="/users",
+        method="GET",
+        operation_id="get_users",
+        summary="Get users with status filter",
+        description="Retrieve users filtered by status",
+        tags=["users"],
+        parameters=[param_with_enum],
+        request_body=None,
+        responses={200: {"description": "Success"}},
+        deprecated=False
+    )
+    
+    report = APIReport(
+        server_name="Test API",
+        server_version="1.0.0",
+        endpoints=[endpoint],
+        mcp_tools=[],
+        openapi_spec={"openapi": "3.0.0"}
+    )
+    
+    formatter = JSONFormatter()
+    output = formatter.format(report)
+    
+    # Parse JSON output
+    parsed = json.loads(output)
+    
+    # Verify basic structure
+    assert len(parsed["endpoints"]) == 1
+    endpoint_data = parsed["endpoints"][0]
+    assert len(endpoint_data["parameters"]) == 1
+    
+    # Verify parameter has enum information
+    param_data = endpoint_data["parameters"][0]
+    assert param_data["name"] == "status"
+    
+    # Should have original enum_info
+    assert "enum_info" in param_data
+    assert param_data["enum_info"]["class_name"] == "UserStatus"
+    
+    # Should have enhanced enum metadata
+    assert "enum_metadata" in param_data
+    enum_metadata = param_data["enum_metadata"]
+    assert enum_metadata["class_name"] == "UserStatus"
+    assert enum_metadata["enum_type"] == "StrEnum"
+    assert enum_metadata["module_name"] == "test.models"
+    assert enum_metadata["description"] == "User status enumeration"
+    assert len(enum_metadata["values"]) == 2
+    
+    # Verify enum values in metadata
+    value_names = [v["name"] for v in enum_metadata["values"]]
+    value_values = [v["value"] for v in enum_metadata["values"]]
+    assert "ACTIVE" in value_names
+    assert "INACTIVE" in value_names
+    assert "active" in value_values
+    assert "inactive" in value_values
+    
+    # Should have enum values in constraints for backward compatibility
+    assert "constraints" in param_data
+    assert "enum" in param_data["constraints"]
+    assert set(param_data["constraints"]["enum"]) == {"active", "inactive"}
+
+
+def test_json_formatter_includes_response_enum_information():
+    """Test that JSON formatter includes enum information in response schemas."""
+    # Create endpoint with response enum information
+    endpoint = EndpointInfo(
+        path="/projects",
+        method="GET",
+        operation_id="get_projects",
+        summary="Get projects",
+        description="Retrieve projects with enum fields",
+        tags=["projects"],
+        parameters=[],
+        request_body=None,
+        responses={
+            200: {
+                "description": "Success",
+                "enum_info": {
+                    "application/json": {
+                        "enum_fields": {
+                            "status": {
+                                "field_type": "pydantic_v2",
+                                "enum_info": {
+                                    "class_name": "ProjectStatus",
+                                    "module_name": "test.models",
+                                    "enum_type": "StrEnum",
+                                    "description": "Project status",
+                                    "values": [
+                                        {"name": "ACTIVE", "value": "active"},
+                                        {"name": "COMPLETED", "value": "completed"}
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        deprecated=False,
+        pydantic_enum_info={
+            "response_model_Project": {
+                "enum_fields": {
+                    "status": {
+                        "field_type": "pydantic_v2",
+                        "enum_info": {
+                            "class_name": "ProjectStatus",
+                            "module_name": "test.models",
+                            "enum_type": "StrEnum",
+                            "description": "Project status",
+                            "values": [
+                                {"name": "ACTIVE", "value": "active"},
+                                {"name": "COMPLETED", "value": "completed"}
+                            ]
+                        }
+                    }
+                }
+            }
+        }
+    )
+    
+    report = APIReport(
+        server_name="Test API",
+        server_version="1.0.0",
+        endpoints=[endpoint],
+        mcp_tools=[],
+        openapi_spec={"openapi": "3.0.0"}
+    )
+    
+    formatter = JSONFormatter()
+    output = formatter.format(report)
+    
+    # Parse JSON output
+    parsed = json.loads(output)
+    
+    # Verify response enum metadata
+    endpoint_data = parsed["endpoints"][0]
+    response_200 = endpoint_data["responses"]["200"]
+    
+    # Should have enhanced enum metadata in response
+    assert "enum_metadata" in response_200
+    enum_metadata = response_200["enum_metadata"]["application/json"]
+    assert "enum_fields" in enum_metadata
+    
+    status_enum = enum_metadata["enum_fields"]["status"]
+    assert status_enum["class_name"] == "ProjectStatus"
+    assert status_enum["enum_type"] == "StrEnum"
+    assert len(status_enum["values"]) == 2
+    
+    # Should have enhanced Pydantic enum metadata
+    assert "pydantic_enum_metadata" in endpoint_data
+    pydantic_metadata = endpoint_data["pydantic_enum_metadata"]["response_model_Project"]
+    assert "enum_fields" in pydantic_metadata
+    
+    status_field = pydantic_metadata["enum_fields"]["status"]
+    assert "enum_metadata" in status_field
+    assert status_field["enum_metadata"]["class_name"] == "ProjectStatus"
+
+
+def test_markdown_formatter_includes_enum_information():
+    """Test that Markdown formatter properly displays enum information in parameter tables."""
+    from fastapi_report.models import EnumInfo, EnumValue
+    
+    # Create enum values
+    enum_values = [
+        EnumValue(name="ACTIVE", value="active", description="User is active"),
+        EnumValue(name="INACTIVE", value="inactive", description="User is inactive"),
+        EnumValue(name="SUSPENDED", value="suspended", description="User is suspended")
+    ]
+    
+    enum_info = EnumInfo(
+        class_name="UserStatus",
+        module_name="test.models",
+        values=enum_values,
+        enum_type="StrEnum",
+        description="User account status enumeration"
+    )
+    
+    # Create parameter with enum information
+    param = ParameterInfo(
+        name="status",
+        param_type="query",
+        python_type="str",
+        required=False,
+        default="active",
+        description="User status filter",
+        constraints={"enum": ["active", "inactive", "suspended"]},
+        enum_info=enum_info
+    )
+    
+    endpoint = EndpointInfo(
+        path="/users",
+        method="GET",
+        operation_id="get_users",
+        summary="Get users",
+        description="Get users filtered by status",
+        tags=["users"],
+        parameters=[param],
+        request_body=None,
+        responses={200: {"description": "Success"}},
+        deprecated=False
+    )
+    
+    report = APIReport(
+        server_name="Test API",
+        server_version="1.0.0",
+        endpoints=[endpoint],
+        mcp_tools=[],
+        openapi_spec={}
+    )
+    
+    formatter = MarkdownFormatter()
+    output = formatter.format(report)
+    
+    # Should contain enum class information
+    assert "Enum[UserStatus]" in output
+    assert "UserStatus" in output
+    
+    # Should contain enum values in the Enum column
+    assert "`active`" in output
+    assert "`inactive`" in output
+    assert "`suspended`" in output
+    
+    # Should contain enum values with descriptions
+    assert "ACTIVE" in output
+    assert "active" in output
+    assert "User is active" in output
+    assert "INACTIVE" in output
+    assert "inactive" in output
+    assert "User is inactive" in output
+    assert "SUSPENDED" in output
+    assert "suspended" in output
+    assert "User is suspended" in output
+    
+    # Should contain "Possible values" text
+    assert "Possible values" in output
+
+
+def test_markdown_formatter_handles_mixed_enum_and_regular_parameters():
+    """Test that Markdown formatter handles both enum and regular parameters correctly."""
+    from fastapi_report.models import EnumInfo, EnumValue
+    
+    # Create enum parameter
+    enum_values = [
+        EnumValue(name="LOW", value=1),
+        EnumValue(name="MEDIUM", value=2),
+        EnumValue(name="HIGH", value=3)
+    ]
+    
+    enum_info = EnumInfo(
+        class_name="Priority",
+        values=enum_values,
+        enum_type="IntEnum"
+    )
+    
+    enum_param = ParameterInfo(
+        name="priority",
+        param_type="query",
+        python_type="int",
+        required=False,
+        default=1,
+        description="Task priority level",
+        enum_info=enum_info
+    )
+    
+    # Create regular parameter
+    regular_param = ParameterInfo(
+        name="limit",
+        param_type="query",
+        python_type="int",
+        required=False,
+        default=10,
+        description="Number of items to return",
+        constraints={"ge": 1, "le": 100}
+    )
+    
+    endpoint = EndpointInfo(
+        path="/tasks",
+        method="GET",
+        parameters=[enum_param, regular_param]
+    )
+    
+    report = APIReport(
+        server_name="Test API",
+        server_version="1.0.0",
+        endpoints=[endpoint]
+    )
+    
+    formatter = MarkdownFormatter()
+    output = formatter.format(report)
+    
+    # Enum parameter should have enhanced formatting
+    assert "Enum[Priority]" in output
+    assert "Priority" in output
+    
+    # Should contain enum values in the Enum column
+    assert "`1`" in output
+    assert "`2`" in output  
+    assert "`3`" in output
+    
+    # Regular parameter should have normal formatting
+    assert "limit" in output
+    assert "int" in output
+    assert "ge=1" in output
+    assert "le=100" in output
+    assert "Number of items to return" in output
+
+
+def test_html_formatter_includes_enum_information():
+    """Test that HTML formatter properly displays enum information in parameter tables."""
+    from fastapi_report.models import EnumInfo, EnumValue
+    
+    # Create enum values
+    enum_values = [
+        EnumValue(name="ACTIVE", value="active", description="User is active"),
+        EnumValue(name="INACTIVE", value="inactive", description="User is inactive"),
+        EnumValue(name="SUSPENDED", value="suspended", description="User is suspended")
+    ]
+    
+    enum_info = EnumInfo(
+        class_name="UserStatus",
+        module_name="test.models",
+        values=enum_values,
+        enum_type="StrEnum",
+        description="User account status enumeration"
+    )
+    
+    # Create parameter with enum information
+    param = ParameterInfo(
+        name="status",
+        param_type="query",
+        python_type="str",
+        required=False,
+        default="active",
+        description="User status filter",
+        constraints={"enum": ["active", "inactive", "suspended"]},
+        enum_info=enum_info
+    )
+    
+    endpoint = EndpointInfo(
+        path="/users",
+        method="GET",
+        operation_id="get_users",
+        summary="Get users",
+        description="Get users filtered by status",
+        tags=["users"],
+        parameters=[param],
+        request_body=None,
+        responses={200: {"description": "Success"}},
+        deprecated=False
+    )
+    
+    report = APIReport(
+        server_name="Test API",
+        server_version="1.0.0",
+        endpoints=[endpoint],
+        mcp_tools=[],
+        openapi_spec={}
+    )
+    
+    formatter = HTMLFormatter()
+    output = formatter.format(report)
+    
+    # Should contain enum type display
+    assert "Enum[UserStatus]" in output
+    
+    # Should contain enum class information
+    assert "UserStatus" in output
+    
+    # Should contain enum values in the Enum column
+    assert 'class="enum-value">active</code>' in output
+    assert 'class="enum-value">inactive</code>' in output
+    assert 'class="enum-value">suspended</code>' in output
+    
+    # Should contain enum values with descriptions
+    assert "ACTIVE" in output
+    assert "active" in output
+    assert "User is active" in output
+    assert "INACTIVE" in output
+    assert "inactive" in output
+    assert "User is inactive" in output
+    assert "SUSPENDED" in output
+    assert "suspended" in output
+    assert "User is suspended" in output
+    
+    # Should contain "Possible values" text
+    assert "Possible values" in output
+    
+    # Should contain enum-specific CSS classes
+    assert "enum-info" in output
+    assert "enum-class" in output
+    assert "enum-values" in output
+    assert "enum-name" in output
+    assert "enum-value" in output
+    
+    # Should contain parameter-specific enum styling
+    assert "param-enum-info" in output
+
+
+def test_html_formatter_handles_mixed_enum_and_regular_parameters():
+    """Test that HTML formatter handles both enum and regular parameters correctly."""
+    from fastapi_report.models import EnumInfo, EnumValue
+    
+    # Create enum parameter
+    enum_values = [
+        EnumValue(name="LOW", value=1),
+        EnumValue(name="MEDIUM", value=2),
+        EnumValue(name="HIGH", value=3)
+    ]
+    
+    enum_info = EnumInfo(
+        class_name="Priority",
+        values=enum_values,
+        enum_type="IntEnum"
+    )
+    
+    enum_param = ParameterInfo(
+        name="priority",
+        param_type="query",
+        python_type="int",
+        required=False,
+        default=1,
+        description="Task priority level",
+        enum_info=enum_info
+    )
+    
+    # Create regular parameter
+    regular_param = ParameterInfo(
+        name="limit",
+        param_type="query",
+        python_type="int",
+        required=False,
+        default=10,
+        description="Number of items to return",
+        constraints={"ge": 1, "le": 100}
+    )
+    
+    endpoint = EndpointInfo(
+        path="/tasks",
+        method="GET",
+        parameters=[enum_param, regular_param]
+    )
+    
+    report = APIReport(
+        server_name="Test API",
+        server_version="1.0.0",
+        endpoints=[endpoint]
+    )
+    
+    formatter = HTMLFormatter()
+    output = formatter.format(report)
+    
+    # Enum parameter should have enhanced formatting
+    assert "Enum[Priority]" in output
+    assert "Priority" in output
+    
+    # Should contain enum values in the Enum column
+    assert 'class="enum-value">1</code>' in output
+    assert 'class="enum-value">2</code>' in output
+    assert 'class="enum-value">3</code>' in output
+    
+    # Regular parameter should have normal formatting
+    assert "limit" in output
+    assert "int" in output
+    assert "ge=1" in output
+    assert "le=100" in output
+    assert "Number of items to return" in output
