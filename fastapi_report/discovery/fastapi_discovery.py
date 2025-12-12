@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, get_type_hints, get_origin, get_ar
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.params import Query, Path, Body, Header
-from fastapi_report.models import EndpointInfo, ParameterInfo, EnumInfo
+from fastapi_report.models import EndpointInfo, ParameterInfo, EnumInfo, EnumValue
 from fastapi_report.discovery.enum_detector import EnumTypeDetector
 
 # Configure logger for FastAPI discovery
@@ -77,7 +77,7 @@ class FastAPIDiscovery:
         operation = path_item.get(method, {})
         
         # Extract parameters
-        parameters = self.extract_parameters(route)
+        parameters = self.extract_parameters(route, operation)
         
         # Extract response models
         responses = self.extract_response_models(route, operation)
@@ -102,12 +102,13 @@ class FastAPIDiscovery:
             pydantic_enum_info=pydantic_enum_info
         )
     
-    def extract_parameters(self, route: APIRoute) -> List[ParameterInfo]:
+    def extract_parameters(self, route: APIRoute, operation: Dict[str, Any] = None) -> List[ParameterInfo]:
         """
-        Extract parameters from route signature.
+        Extract parameters from route signature and OpenAPI schema.
         
         Args:
             route: FastAPI route to analyze
+            operation: OpenAPI operation dict for additional metadata
             
         Returns:
             List of ParameterInfo objects
@@ -118,14 +119,25 @@ class FastAPIDiscovery:
         sig = inspect.signature(route.endpoint)
         type_hints = get_type_hints(route.endpoint)
         
+        # Get OpenAPI parameters for additional enum information
+        openapi_params = {}
+        if operation and "parameters" in operation:
+            for openapi_param in operation["parameters"]:
+                param_name = openapi_param.get("name")
+                if param_name:
+                    openapi_params[param_name] = openapi_param
+        
         for param_name, param in sig.parameters.items():
             # Skip special parameters
             if param_name in ("self", "cls", "request", "response"):
                 continue
             
+            # Get corresponding OpenAPI parameter
+            openapi_param = openapi_params.get(param_name)
+            
             # Determine parameter type and extract metadata
             param_info = self._extract_parameter_info(
-                param_name, param, type_hints.get(param_name)
+                param_name, param, type_hints.get(param_name), openapi_param
             )
             
             if param_info:
@@ -137,7 +149,8 @@ class FastAPIDiscovery:
         self, 
         name: str, 
         param: inspect.Parameter,
-        type_hint: Any
+        type_hint: Any,
+        openapi_param: Optional[Dict[str, Any]] = None
     ) -> Optional[ParameterInfo]:
         """
         Extract information from a single parameter.
@@ -200,6 +213,18 @@ class FastAPIDiscovery:
             # Merge enum information from both sources
             if type_enum_info or field_enum_constraints:
                 enum_info = self._merge_enum_constraints(field_enum_constraints, type_enum_info)
+        
+        # Check OpenAPI parameter schema for additional enum information
+        # Only use OpenAPI enum information if no enum was detected from type hints/fields
+        if openapi_param and not enum_info:
+            openapi_enum_info = self._extract_enum_from_openapi_param(openapi_param)
+            if openapi_enum_info:
+                enum_info = openapi_enum_info
+                # Update python_type to show enum information
+                if "Optional[" in python_type or " | " in python_type or "Union[" in python_type:
+                    python_type = f"Optional[Enum[{enum_info.class_name}]]"
+                else:
+                    python_type = f"Enum[{enum_info.class_name}]"
         
         return ParameterInfo(
             name=name,
@@ -728,6 +753,88 @@ class FastAPIDiscovery:
             logger.error(f"Failed to resolve schema reference {ref}: {e}")
             return {}
     
+    def _extract_enum_from_openapi_param(self, openapi_param: Dict[str, Any]) -> Optional[EnumInfo]:
+        """
+        Extract enum information from OpenAPI parameter schema.
+        
+        Args:
+            openapi_param: OpenAPI parameter object
+            
+        Returns:
+            EnumInfo object if enum is found, None otherwise
+        """
+        try:
+            schema = openapi_param.get("schema", {})
+            if not schema:
+                return None
+            
+            # Handle $ref in schema
+            if "$ref" in schema:
+                ref_enum_info = self._discover_enums_in_ref_schema(schema["$ref"])
+                if ref_enum_info and "direct_enum" in ref_enum_info:
+                    enum_data = ref_enum_info["direct_enum"]
+                    enum_values = enum_data.get("values", [])
+                    
+                    # Create EnumValue objects
+                    enum_value_objects = []
+                    for value in enum_values:
+                        enum_value_objects.append(EnumValue(
+                            name=str(value).upper(),  # Convert to uppercase for name
+                            value=value,
+                            description=None
+                        ))
+                    
+                    # Get schema title and description from the resolved schema
+                    openapi_schema = self.get_openapi_schema()
+                    ref_path = schema["$ref"][2:].split("/")  # Remove "#/" and split
+                    current = openapi_schema
+                    for path_part in ref_path:
+                        if isinstance(current, dict) and path_part in current:
+                            current = current[path_part]
+                        else:
+                            current = {}
+                            break
+                    
+                    class_name = current.get("title", "UnknownEnum")
+                    description = current.get("description", "")
+                    
+                    return EnumInfo(
+                        class_name=class_name,
+                        module_name="openapi.schema",
+                        values=enum_value_objects,
+                        enum_type="StrEnum",
+                        description=description
+                    )
+            
+            # Handle direct enum in schema
+            elif "enum" in schema:
+                enum_values = schema["enum"]
+                if isinstance(enum_values, list):
+                    # Create EnumValue objects
+                    enum_value_objects = []
+                    for value in enum_values:
+                        enum_value_objects.append(EnumValue(
+                            name=str(value).upper(),  # Convert to uppercase for name
+                            value=value,
+                            description=None
+                        ))
+                    
+                    class_name = schema.get("title", "UnknownEnum")
+                    description = schema.get("description", "")
+                    
+                    return EnumInfo(
+                        class_name=class_name,
+                        module_name="openapi.schema",
+                        values=enum_value_objects,
+                        enum_type="StrEnum",
+                        description=description
+                    )
+            
+            return None
+            
+        except Exception as e:
+            logger.warning(f"Failed to extract enum from OpenAPI parameter: {e}")
+            return None
     def _discover_enums_in_pydantic_model(self, model_class) -> Dict[str, Any]:
         """
         Discover enum fields in Pydantic models with comprehensive error handling.

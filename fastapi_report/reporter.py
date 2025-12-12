@@ -114,6 +114,22 @@ class EndpointReporter:
         """
         from fastapi_report.models import EnumInfo, EnumValue
         
+        # Handle direct $ref in schema
+        if '$ref' in schema:
+            resolved_schema = self._resolve_ref(schema['$ref'], openapi_spec)
+            if resolved_schema and 'enum' in resolved_schema:
+                enum_values = []
+                for value in resolved_schema['enum']:
+                    enum_values.append(EnumValue(name=str(value).upper(), value=value))
+                
+                return EnumInfo(
+                    class_name=resolved_schema.get('title', 'Enum'),
+                    module_name=None,
+                    values=enum_values,
+                    enum_type='StrEnum' if all(isinstance(v, str) for v in resolved_schema['enum']) else 'Enum',
+                    description=resolved_schema.get('description')
+                )
+        
         # Direct enum in schema
         if 'enum' in schema:
             enum_values = []
