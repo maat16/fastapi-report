@@ -130,6 +130,40 @@ class EndpointReporter:
                     description=resolved_schema.get('description')
                 )
         
+        # Handle arrays with enum items (e.g., array of enum values)
+        if schema.get('type') == 'array' and 'items' in schema:
+            items_schema = schema['items']
+            
+            # Handle $ref in array items
+            if '$ref' in items_schema:
+                resolved_items_schema = self._resolve_ref(items_schema['$ref'], openapi_spec)
+                if resolved_items_schema and 'enum' in resolved_items_schema:
+                    enum_values = []
+                    for value in resolved_items_schema['enum']:
+                        enum_values.append(EnumValue(name=str(value).upper(), value=value))
+                    
+                    return EnumInfo(
+                        class_name=resolved_items_schema.get('title', 'Enum'),
+                        module_name=None,
+                        values=enum_values,
+                        enum_type='StrEnum' if all(isinstance(v, str) for v in resolved_items_schema['enum']) else 'Enum',
+                        description=resolved_items_schema.get('description', schema.get('description'))
+                    )
+            
+            # Handle direct enum in array items
+            elif 'enum' in items_schema:
+                enum_values = []
+                for value in items_schema['enum']:
+                    enum_values.append(EnumValue(name=str(value).upper(), value=value))
+                
+                return EnumInfo(
+                    class_name=items_schema.get('title', schema.get('title', 'Enum')),
+                    module_name=None,
+                    values=enum_values,
+                    enum_type='StrEnum' if all(isinstance(v, str) for v in items_schema['enum']) else 'Enum',
+                    description=items_schema.get('description', schema.get('description'))
+                )
+        
         # Direct enum in schema
         if 'enum' in schema:
             enum_values = []
@@ -193,8 +227,11 @@ class EndpointReporter:
         # Check for enum first
         enum_info = self._extract_enum_from_openapi_schema(schema, openapi_spec)
         if enum_info:
+            # Check if it's an array of enums
+            if schema.get('type') == 'array':
+                return f"List[Enum[{enum_info.class_name}]]"
             # Check if it's optional (has null in anyOf)
-            if 'anyOf' in schema:
+            elif 'anyOf' in schema:
                 has_null = any(item.get('type') == 'null' for item in schema['anyOf'])
                 if has_null:
                     return f"Optional[Enum[{enum_info.class_name}]]"
